@@ -38,7 +38,7 @@ inline uint32_t Sp_sampler::random_node() const {
 // in the path. The list of these vertices is not necessarily ordered.
 // We do not return the vector by reference, because the compiler optimizations
 // avoid to copy the whole vector before returning it.
-vector<uint32_t> Sp_sampler::random_path() {
+map<uint32_t, int>/*vector<uint32_t>*/ Sp_sampler::random_path(int &path_length , int &num_paths , double alpha_sp_sampling) {
     // Sample sp
     uint32_t end_q = 0;
     uint64_t tot_weight = 0, cur_edge = 0;
@@ -57,6 +57,20 @@ vector<uint32_t> Sp_sampler::random_path() {
 
     while (u == v) {
         v = random_node();
+    }
+
+    bool guess_void = false;
+    if(g->directed){
+      if(g->cc[u] < g->cc[v]){
+        guess_void = true;
+        return std::map<uint32_t,int>();//vector<uint32_t>();
+      }
+    }
+    else{
+      if(g->cc[u] != g->cc[v]){
+        guess_void = true;
+        return std::map<uint32_t,int>();//vector<uint32_t>();
+      }
     }
 
     end_q = 2;
@@ -135,24 +149,79 @@ vector<uint32_t> Sp_sampler::random_path() {
         for (uint32_t i = 0; i < end_q; i++) {
             ball_indicator[q[i]] = UNVISITED;
         }
-        return vector<uint32_t>();
+        if(g->directed == false && guess_void == false){
+          std::cout << "Error: guess void false, path.size() == 0 " << std::endl;
+          std::cout << "   cc[u] " << g->cc[u] << " cc[v] " << g->cc[v] << std::endl;
+        }
+        return std::map<uint32_t,int>();//vector<uint32_t>();
     }
 
     for (pair<uint32_t, uint32_t> p : sp_edges) {
         tot_weight += n_paths[p.first]*n_paths[p.second];
     }
 
-    random_edge = randgen->get_max(tot_weight);
+    /*std::cout << "***start sampling SPs " << std::endl;
+    std::cout << "tot_weight " << tot_weight << std::endl;*/
     vector<uint32_t> path;
-
-    for (pair<uint32_t, uint32_t> p : sp_edges) {
-        cur_edge += n_paths[p.first]*n_paths[p.second];
-        if (cur_edge > random_edge) {
-            backtrack_path( u, v, p.first, path );
-            backtrack_path( u, v, p.second, path );
-            break;
-        }
+    int num_paths_to_sample = 1;
+    if (alpha_sp_sampling > 0. && tot_weight > 1){
+       num_paths_to_sample = alpha_sp_sampling*tot_weight;
     }
+    num_paths = num_paths_to_sample;
+    std::map<uint32_t, int> path_map;
+    for(int j = 0; j<num_paths_to_sample; j++){
+
+        random_edge = randgen->get_max(tot_weight);
+        path.clear();
+        cur_edge = 0;
+
+        for (pair<uint32_t, uint32_t> p : sp_edges) {
+            cur_edge += n_paths[p.first]*n_paths[p.second];
+            if (cur_edge > random_edge) {
+                backtrack_path( u, v, p.first, path );
+                backtrack_path( u, v, p.second, path );
+                break;
+            }
+        }
+
+        if(j==0){ path_length = path.size(); }
+
+        /*for(uint32_t u:path){
+          std::cout << u << " ";
+        }
+        std::cout << std::endl;*/
+        for(uint32_t u:path){
+          path_map[u] = path_map[u]+1;
+        }
+
+    }
+
+    /*int j=0;
+    for(uint32_t u:path){
+      std::cout << u << " ";
+      j++; if(j>=path_length){j=0; std::cout << "\n";}
+    }*/
+
+
+    /*for (const auto& n : path_map) {
+      std::cout << n.first << " = " << n.second << "; ";
+    }
+    std::cout << "\n***done sampling SPs " << std::endl;*/
+
+
+    //std::cout << "***compute all SPs " << std::endl;
+    /*vector<uint32_t> all_paths;
+    for (pair<uint32_t, uint32_t> p : sp_edges) {
+          backtrack_all_paths( u, v, p.first, all_paths );
+          backtrack_all_paths( u, v, p.second, all_paths );
+    }*/
+    /*int j=0;
+    for(uint32_t u:all_paths){
+      std::cout << u << " ";
+      j++; if(j>=path.size()){j=0; std::cout << "\n";}
+    }
+    std::cout << std::endl;
+    std::cout << "***done computing SPs " << std::endl;*/
 
     // Have to reset ball_indicator!
     for (uint32_t i = 0; i < end_q; i++) {
@@ -160,7 +229,12 @@ vector<uint32_t> Sp_sampler::random_path() {
     }
     // Have to reset pred!
     pred->remove_some_edges(q, end_q);
-    return path;
+    if(guess_void && path.size() > 0){
+      std::cout << "Error: guess void true, path.size() > 0 " << std::endl;
+      std::cout << "   cc[u] " << g->cc[u] << " cc[v] " << g->cc[v] << std::endl;
+    }
+    //return path;
+    return path_map;
 }
 
 // Backtracks the pred graph to extract a random shortest path.
@@ -187,6 +261,22 @@ void Sp_sampler::backtrack_path( const uint32_t u, const uint32_t v, const uint3
 
     if( w!=u && w!=v ) {
         backtrack_path( u, v, w, path );
+    }
+}
+
+
+// Backtracks the pred graph to extract all shortest paths.
+void Sp_sampler::backtrack_all_paths( const uint32_t u, const uint32_t v, const uint32_t start, vector<uint32_t> &path ) {
+    uint32_t w = 0;
+    if (start == u || start == v) {
+        return;
+    }
+    path.push_back(start);
+    for ( uint32_t t=0; t<pred->get_deg(start); t++ ) {
+        w = pred->get_adj(start)[t];
+        if( w!=u && w!=v ) {
+            backtrack_all_paths( u, v, w, path );
+        }
     }
 }
 

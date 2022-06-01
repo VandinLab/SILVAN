@@ -2,42 +2,36 @@ import os
 import time
 import numpy as np
 import math
+import pandas as pd
 
-bcest_max = {
-    "cit-HepTh.txt" : 0.00001 ,
-    "cit-HepPh.txt" : 0.00001 ,
-    "dip20090126_MAX.nde" : 0.495560 ,
-    "in_2004.nde" : 0.177073  ,
-    "p2p-Gnutella31.txt" : 0.007749,
-    "cnr_2000.nde" : 0.258061 ,
-    "com-amazon.ungraph.txt" : 0.011748,
-    "email-Enron.txt" : 0.065,
-    "ca-GrQc.txt" : 0.00148,
-    "oregon1_010526.txt" : 0.0097,
-    "soc-Epinions1.txt" : 0.072,
-    "wiki-Vote.txt" : 0.045
-}
-datasets = bcest_max.keys()
+graph_experiments_paths = "graphs_experiments.csv"
+graphs = pd.read_csv(graph_experiments_paths,sep=";")
+graphs = graphs.set_index('graph_name').T.to_dict('list')
+print(graphs)
+#graphs = graphs["graph_name"].values
 
-num_runs = 20
+num_runs = 10
 db_path = "../datasets/"
 
 # parameters to choose epsilon
 max_eps = 10**-2
-min_eps = 10**-6
-numeps_ = 7
+min_eps = 10**-4
+numeps_ = 5
+run_kadabra = 1
 
-choose_random_eps = 1
+choose_random_eps = 0
 if choose_random_eps == 1:
     epsilons = [1.0]
 else:
-    epsilons = np.logspace(math.log(min_eps,10) , math.log(max_eps,10),numeps_)
+    epsilons = list(np.logspace(math.log(min_eps,10) , math.log(max_eps,10),numeps_))
+    epsilons.reverse()
+    epsilons = [0.01 , 0.005 , 0.0025 , 0.001 , 0.0005]
     print("epsilons",epsilons)
 
 
-for epsilon in epsilons:
-    for run_id in range(num_runs):
-        for index , dataset in enumerate(datasets):
+for run_id in range(num_runs):
+    for epsilon in epsilons:
+        for graph_name in graphs:
             if choose_random_eps == 1:
                 bcest_loc = bcest_max[dataset]
                 # set minimum value of eps to choose
@@ -49,8 +43,19 @@ for epsilon in epsilons:
                 epsilon_rnd = np.exp(np.random.uniform(math.log(min_eps_est), math.log(max_eps_loc)))
                 print(epsilon_rnd)
                 epsilon = epsilon_rnd
+            directed = graphs[graph_name]
+            directed = directed[0] == 'D'
+            directed_flag = ""
+            if directed == True:
+                directed_flag = " -t 1"
             # run the experiment
-            cmd = "python3 run_kadabra.py -db "+db_path+dataset+" -e "+str(epsilon)
+            graph_name = graph_name.replace(".txt","_pre.txt")
+            cmd = "python3 run_kadabra.py -db "+db_path+graph_name+" -e "+str(epsilon)+directed_flag
+            if run_kadabra == 1:
+                print("run ",run_id," ",cmd)
+                os.system(cmd)
+                time.sleep(1)
+            cmd = "python3 run_silvan.py -db "+db_path+graph_name+" -e "+str(epsilon)+directed_flag
             print("run ",run_id," ",cmd)
             os.system(cmd)
             time.sleep(1)

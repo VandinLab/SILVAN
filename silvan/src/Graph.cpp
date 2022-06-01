@@ -272,6 +272,7 @@ uint32_t Graph::compute_ecc_in_scc(const uint32_t start, uint32_t *q, int32_t *d
 uint32_t Graph::estimate_diameter() {
     compute_cc();
     compute_cc_adj();
+    std::cout << "n_components " << n_components << std::endl;
 
     uint32_t *q = (uint32_t*) malloc(get_nn() * sizeof(uint32_t));
     int32_t *dist_f = (int32_t*) malloc(get_nn() * sizeof(int32_t));
