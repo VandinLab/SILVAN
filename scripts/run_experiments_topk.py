@@ -5,7 +5,7 @@ import math
 import pandas as pd
 from datetime import datetime
 
-graph_experiments_paths = "graphs_experiments_topk.csv"
+graph_experiments_paths = "graphs_experiments.csv"
 graphs = pd.read_csv(graph_experiments_paths,sep=";")
 graphs = graphs.set_index('graph_name').T.to_dict('list')
 print(graphs)

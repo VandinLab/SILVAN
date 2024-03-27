@@ -1,5 +1,6 @@
 # preprocess graphs by shifting node ids to consecutive values
 # this is to make sure KADABRA and SILVAN work correctly
+# convert space separated edges to tab separated for BAVARIAN
 
 import os
 import os.path

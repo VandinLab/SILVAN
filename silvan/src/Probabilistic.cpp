@@ -38,7 +38,7 @@ Status::~Status() {
 
 // Creates the graph for running the approximation algorithm.
 // For more information see the graph class.
-Probabilistic::Probabilistic( const std::string &filename, const bool directed, const double verb, const double sampling_rate_, const bool alpha_given_, const double empirical_peeling_param_, const std::string output_file_ ): Graph( filename, directed ), verbose(verb) {
+Probabilistic::Probabilistic( const std::string &filename, const bool directed, const double verb, const double sampling_rate_, const bool alpha_given_, const double empirical_peeling_param_ , const bool enable_m_hat_, const std::string output_file_ ): Graph( filename, directed ), verbose(verb) {
     approx = (double *) calloc( get_nn(), sizeof(double) );
     approx_toadd = (double *) calloc( get_nn(), sizeof(double) );
     time_bfs = (double *) calloc( omp_get_max_threads(), sizeof(double) );
@@ -73,6 +73,7 @@ Probabilistic::Probabilistic( const std::string &filename, const bool directed, 
     alpha_sp_given = alpha_given_;
     alpha_sp_sampling = sampling_rate_;
     empirical_peeling_a = empirical_peeling_param_;
+    enable_m_hat = enable_m_hat_;
 }
 
 
@@ -251,7 +252,14 @@ bool Probabilistic::compute_finished_mcrade(Status *status) {
 
   std::cout << std::endl;
   double num_samples_d = (double)num_samples;
-  double delta_for_progressive_bound_ = delta/pow(2.,iteration_index);
+  double delta_for_progressive_bound_ = 1.0;
+  bool debug_eps_partitions = false;
+  if(absolute && enable_m_hat){
+    delta_for_progressive_bound_ = delta_for_progressive_bound;
+  }
+  else{
+    delta_for_progressive_bound_ = delta/pow(2.,iteration_index);
+  }
   cout << "EVALUATING STOPPING CONDITION at iteration " << iteration_index << " (m="<< num_samples <<", d="<<delta_for_progressive_bound_<<")" << std::endl;
   //std::cout << "(Printing thread: " << omp_get_thread_num() << ")" << endl;
 
@@ -264,27 +272,30 @@ bool Probabilistic::compute_finished_mcrade(Status *status) {
     double top1_est_bc = approx[status->top_k[0]]/ num_samples_d;
     double top1bc_upperbound = getUpperBoundTop1BC(top1_est_bc , delta_for_progressive_bound_);
     double wimpy_var_upperbound = getUpperBoundTop1BC(sup_emp_wimpy_var/num_samples_d , delta_for_progressive_bound_);
-    //computeRelBound(top1_est_bc , delta_for_progressive_bound_ , avg_diam_upperbound , num_samples_d , true);
-    //computeRelBound(top1_est_bc , delta_for_progressive_bound_ , avg_diam_upperbound , num_samples_d , false);
 
     // compute upper limit on number of samples
-    uint64_t max_num_samples = getUpperBoundSamples(top1bc_upperbound , wimpy_var_upperbound , avg_diam_upperbound , err , delta_for_progressive_bound_);
-    if(last_stopping_samples > (double)max_num_samples){
-      last_stopping_samples = (double)max_num_samples;
-      omega = last_stopping_samples;
-      cout << "******NEW STOPPING CONDITION UPDATE!!! last_stopping_samples: " << last_stopping_samples << std::endl;
-    }
-    if(max_num_samples <= num_samples){
-      cout << "******NEW STOPPING CONDITION TRUE!!! " << std::endl;
-      /*cout << "MCRADE STOPS WITH eps " << err << std::endl;
-      cout << "MCRADE STOPS at iteration " << iteration_index << std::endl;
-      cout << "MCRADE STOPS at sample size " << num_samples << std::endl;
-      cout << "MCRADE STOPS after seconds " << get_time_sec() - start_time << std::endl;*/
+    if(enable_m_hat){
+      uint64_t max_num_samples = getUpperBoundSamples(top1bc_upperbound , wimpy_var_upperbound , avg_diam_upperbound , err , delta_for_progressive_bound_);
+      if(last_stopping_samples > (double)max_num_samples){
+        last_stopping_samples = (double)max_num_samples;
+        omega = last_stopping_samples;
+        cout << "******NEW STOPPING CONDITION UPDATE!!! last_stopping_samples: " << last_stopping_samples << std::endl;
+        double max_num_iterations = log((double)max_num_samples/(double)first_stopping_samples)/log(1.2)+1;
+        delta_for_progressive_bound = delta/(floor(max_num_iterations));
+      }
+      if(max_num_samples <= num_samples){
+        cout << "******NEW STOPPING CONDITION TRUE!!! " << std::endl;
+      }
     }
   }
 
   // first, reset counters for computation of mcera
+  std::vector<int> counts_nodes_partition;
+  std::vector<double> mcera_full_f_trials;
+  counts_nodes_partition.resize(number_of_non_empty_partitions);
+  mcera_full_f_trials.resize(mctrials);
   for(int i = 0; i < number_of_non_empty_partitions; i++){
+    counts_nodes_partition[i] = 0;
     sup_bcest_partition[i] = 0;
     sup_empwvar_partition[i] = 0;
     epsilon_partition[i] = 1.0;
@@ -295,26 +306,42 @@ bool Probabilistic::compute_finished_mcrade(Status *status) {
   }
 
   // iterate over nodes to update the mcera
-  for (uint32_t i = 0; i < status->k; i++) {
-      uint32_t v = status->top_k[i];
+  for (uint32_t i = 0; i < get_nn(); i++) {
+      uint32_t v = i;
       uint32_t v_rade_idx = v*mctrials;
 
       int node_partition_index = partition_index[v];
       int mapped_partition_index = partitions_ids_map[node_partition_index];
       sup_bcest_partition[mapped_partition_index] = max(sup_bcest_partition[mapped_partition_index] , (uint64_t)approx[v]);
       sup_empwvar_partition[mapped_partition_index] = max(sup_empwvar_partition[mapped_partition_index] , emp_wimpy_vars[v]);
+      counts_nodes_partition[mapped_partition_index] = counts_nodes_partition[mapped_partition_index]+1;
       int mcera_partition_index = mctrials*mapped_partition_index;
       for(uint32_t j = 0; j < mctrials; j++){
         max_mcera_partition[mcera_partition_index+j] = max(max_mcera_partition[mcera_partition_index+j] , mcrade[v_rade_idx+j]);
       }
   }
+  double sup_empwvar_full_f = 0.;
+  for(int i = 0; i < number_of_non_empty_partitions; i++){
+    sup_empwvar_full_f = max(sup_empwvar_full_f , (double)sup_empwvar_partition[i]);
+  }
+  sup_empwvar_full_f = sup_empwvar_full_f/num_samples_d;
+  double mcera_full_f = 0.;
+  for(uint32_t j = 0; j < mctrials; j++){
+    mcera_full_f_trials[j] = -(double)status->n_pairs;
+    for(int i = 0; i < number_of_non_empty_partitions; i++){
+      mcera_full_f_trials[j] = max(mcera_full_f_trials[j] , (double)max_mcera_partition[mctrials*i+j]);
+    }
+    mcera_full_f += mcera_full_f_trials[j]/(double)mctrials;
+  }
+  mcera_full_f = mcera_full_f/num_samples_d;
+  double eps_full_f = get_epsilon_mcrade(sup_empwvar_full_f , mcera_full_f , delta_for_progressive_bound_ , num_samples_d , -1 , false);
 
   // compute mcera for all partitions
   // this array containes the mcera for every partition
-  double *mcera_partition_avg = (double*)calloc( (uint32_t)number_of_non_empty_partitions , sizeof(double));
+  std::vector<double> mcera_partition_avg;
+  mcera_partition_avg.resize(number_of_non_empty_partitions);
   double mcera_avg_ = 0.0;
   int mcera_partition_index = 0;
-  double delta_each_partition = delta_for_progressive_bound_/number_of_non_empty_partitions;
   for(int i = 0; i < number_of_non_empty_partitions; i++){
     mcera_avg_ = 0.0;
     mcera_partition_index = mctrials*i;
@@ -325,7 +352,9 @@ bool Probabilistic::compute_finished_mcrade(Status *status) {
     mcera_partition_avg[i] = mcera_avg_;
     double sup_emp_wimpy_var_ = sup_empwvar_partition[i]/num_samples_d;
     // compute epsilon for this partition
-    double current_eps = get_epsilon_mcrade(sup_emp_wimpy_var_ , mcera_avg_ , delta_each_partition , num_samples_d , false);
+    double delta_this_partition = delta_for_progressive_bound_/number_of_non_empty_partitions;
+    //double delta_this_partition = delta_for_progressive_bound_/(pow(2.,(double)i+1.));
+    double current_eps = get_epsilon_mcrade(sup_emp_wimpy_var_ , mcera_avg_ , delta_this_partition , num_samples_d , counts_nodes_partition[i] , false);
     epsilon_partition[i] = current_eps;
   }
 
@@ -347,12 +376,18 @@ bool Probabilistic::compute_finished_mcrade(Status *status) {
     }
     else{
       cout << "   mcrade eps " << sup_eps << std::endl;
-      for(int i = 0; i < number_of_non_empty_partitions; i++){
-        cout << "      epsilon_partition["<< i <<"] " << epsilon_partition[i] << std::endl;
+      if(debug_eps_partitions){
+        cout << "      eps_full_f " << eps_full_f << std::endl;
+        cout << "         supvar_full_f " << sup_empwvar_full_f << std::endl;
+        cout << "         mcera_full_f " << mcera_full_f << std::endl;
+        for(int i = 0; i < number_of_non_empty_partitions; i++){
+          cout << "      epsilon_partition["<< i <<"] " << epsilon_partition[i] << std::endl;
+          cout << "         supvar["<< i <<"] " << sup_empwvar_partition[i]/num_samples_d << std::endl;
+          cout << "         mcera_partition_avg["<< i <<"] " << mcera_partition_avg[i] << std::endl;
+          cout << "         counts_nodes_partition["<< i <<"] " << counts_nodes_partition[i] << std::endl;
+        }
       }
     }
-
-    free(mcera_partition_avg);
 
     return sup_eps <= err;
   }
@@ -371,9 +406,6 @@ bool Probabilistic::compute_finished_mcrade(Status *status) {
     else{
         cout << "MCRADE REL DOES NOT STOP " << std::endl;
     }
-
-
-    free(mcera_partition_avg);
 
     return top_k_done;
 
@@ -407,16 +439,13 @@ void Probabilistic::print_status(Status *status, const bool full) const {
     double avg_time_bfs = 0.;
     double avg_time_finished = 0.;
     double avg_time_critical_round = 0.;
-    //std::cout << "time bfs: " << endl;
     for(int i = 0; i < omp_get_max_threads(); i++){
       avg_time_bfs += time_bfs[i]/(double)omp_get_max_threads();
       avg_time_critical += time_critical[i]/(double)omp_get_max_threads();
       avg_time_critical_round += time_critical_round[i]/(double)omp_get_max_threads();
       avg_time_mcera += time_mcera[i]/(double)omp_get_max_threads();
       avg_time_finished += time_comp_finished[i]/(double)omp_get_max_threads();
-      //std::cout << time_bfs[i] << ", ";
     }
-    //std::cout << endl;
     if (full) {
       std::cout << "Avg time bfs: " << avg_time_bfs << endl;
       std::cout << "Avg time critical: " << avg_time_critical << endl;
@@ -636,6 +665,7 @@ double Probabilistic::check_topk_guarantees(bool verbose){
 
   if(is_relative_approx){
     std::cout << "RELATIVE APPROX FOR TOP-K OBTAINED" << std::endl;
+    uint32_t num_output_topk = 0;
     for(uint32_t i=0; i<num_inserted; i++ ){
       uint64_t node_id = this->top_k->get(i);
       double approx_node = this->top_k->get_value(i)/num_samples_d;
@@ -646,25 +676,34 @@ double Probabilistic::check_topk_guarantees(bool verbose){
       double upperbound_bc_ = approx_node+eps_current_node;
       if(upperbound_bc_ > lb_topk_bc){
         std::cout << i+1 <<") ("<<node_id<<") " << lowerbound_bc_ << " " << approx_node << " " << upperbound_bc_ << " " << std::endl;
+        num_output_topk++;
       }
-      /*else{
-        std::cout << "* " << i+1 <<")  ("<<node_id<<") " << lowerbound_bc_ << " " << approx_node << " " << upperbound_bc_ << " " << std::endl;
-      }*/
     }
+    this->numresults_topk = num_output_topk;
   }
 
   return is_relative_approx;
 
 }
 
-double Probabilistic::get_epsilon_mcrade(double sup_emp_wimpy_var_ , double mcera_ , double delta_ , double num_samples_ , bool verbose) const{
+double Probabilistic::get_epsilon_mcrade(double sup_emp_wimpy_var_ , double mcera_ , double delta_ , double num_samples_ , double num_nodes_ , bool verbose) const{
   // computes the probabilistic upper bound on supremum deviation given the mcera
   mcera_ = max(mcera_ , 0.);
   double log_term_mcrade = log(5./delta_)/num_samples_;
   double var_ub = sup_emp_wimpy_var_ + log_term_mcrade + sqrt( pow(log_term_mcrade,2.) + 2 * log_term_mcrade * sup_emp_wimpy_var_ );
+  var_ub = min(var_ub , 0.25);
   double era_ub = mcera_ + sqrt( 4 * sup_emp_wimpy_var_ * log_term_mcrade / (double)mctrials );
   double ra_ub = era_ub + log_term_mcrade + sqrt( pow(log_term_mcrade,2.) + 2 * log_term_mcrade * era_ub );
-  double eps_ub = 2 * ra_ub + sqrt( 2 * log_term_mcrade * ( var_ub + 4 * ra_ub ) );
+  if(num_nodes_ == 1){
+    ra_ub = 0;
+  }
+  double eps_ub = 2 * ra_ub + sqrt( 2 * log_term_mcrade * ( var_ub + 4 * ra_ub ) ) + log_term_mcrade/3;
+  double eps_ub_2 = 2 * ra_ub + sqrt( log_term_mcrade / 2. );
+  eps_ub = min(eps_ub,eps_ub_2);
+  if(num_nodes_ >= 1){
+    double eps_unb = sqrt( 2 * var_ub * log(5./delta_*num_nodes_)/num_samples_ ) + log(5./delta_*num_nodes_)/num_samples_/3;
+    eps_ub = min(eps_ub,eps_unb);
+  }
   return eps_ub;
 }
 
@@ -698,6 +737,7 @@ double Probabilistic::getUpperBoundAvgDiameter(double delta , bool verbose){
   double log_term_avgspl = log(1./delta);
   double const_term_avgspl = (graph_diameter-2)*log_term_avgspl/(double)num_samples;
   double avg_diam_upperbound_b = avg_diam_ + const_term_avgspl + sqrt( 2*const_term_avgspl*avg_diam_ + pow(const_term_avgspl,2.) );
+  bool debug_sp_lengths = false;
 
   // upper bound using empirical bernstein
   double var_estimate_avg_diam = 0.;
@@ -705,7 +745,7 @@ double Probabilistic::getUpperBoundAvgDiameter(double delta , bool verbose){
     for( int j=i+1; j <= graph_diameter; j++ ){
       var_estimate_avg_diam += pow(i-j,2.0)*sp_lengths[i]/(double)num_samples*sp_lengths[j]/(double)(num_samples-1);
     }
-    if(verbose && sp_lengths[i] > 0){
+    if(verbose && debug_sp_lengths && sp_lengths[i] > 0){
       cout << "   sp_lengths["<<i<<"]: " << sp_lengths[i] << std::endl;
     }
   }
@@ -741,23 +781,18 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
     //omp_set_num_threads(64);
     std::cout << "estimated diameter of the graph: " << graph_diameter << std::endl;
     std::cout << "time for estimating diameter " << get_time_sec() - start_time << std::endl;
-    //this->omega = 0.5 / err / err * (log2(graph_diameter-1) + 1 + log(2. / delta));
-    // here it should be log(2 / delta) ?
-    //std::cout << "this->omega: " << this->omega << std::endl;
-    uint32_t tau = max(1. / err * (log(1. / delta)) , 100.);
+    uint32_t tau = max(1. / err * (log(1. / delta)) , 1000.);
     tau = max((double)tau , 2 * graph_diameter * (log(1. / delta)) );
-    std::cout << "tau: " << tau << std::endl;
-    //tau = max(tau,(uint32_t)1000);
-    //tau = min(tau,(uint32_t)100000);
-    /*double rel_param = 0.4;
-    double test_theta = 0.01;
-    double test_rel = 2. / (rel_param*rel_param*test_theta) * (log2(2*(graph_diameter-1))*log(1.0 / test_theta) + log(20.0 / delta) );
-    std::cout << "test_rel: " << test_rel << std::endl;*/
+    std::cout << "Starting first pass. Tentative number of samples: " << tau << std::endl;
     num_samples = 0;
     sup_bcest = 0;
     sup_emp_wimpy_var = 0;
     void_samples = 0;
     second_phase_started = false;
+    enable_emp_peel = empirical_peeling_a > 1;
+    if(!enable_emp_peel){
+      empirical_peeling_a = 100*tau;
+    }
 
 
     if (union_sample == 0) {
@@ -821,6 +856,9 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
       double emp_w_node = emp_wimpy_vars[i]/(double)num_samples;
       double min_inv_w_node = min(1./emp_w_node , (double)num_samples);
       int node_partition_idx = (int)(log(min_inv_w_node)/log(empirical_peeling_a)+1);
+      if(!enable_emp_peel){
+        node_partition_idx = 0;
+      }
       partition_index[i] = node_partition_idx;
       non_empty_partitions[node_partition_idx] = non_empty_partitions[node_partition_idx] + 1;
     }
@@ -848,10 +886,6 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
     for (const auto &elem : non_empty_partitions){
       std::cout << "  part. w. index  " << elem.first << " has " << elem.second << " elements, map to " << partitions_ids_map[elem.first] << std::endl;
     }
-
-
-
-    // start old code
 
 
     *time_bfs = 0;
@@ -888,7 +922,13 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
       }
 
       // compute upper limit on number of samples
-      max_num_samples = getUpperBoundSamples(top1bc_upperbound , wimpy_var_upperbound , avg_diam_upperbound , err , delta/2.);
+      if(enable_m_hat){
+        max_num_samples = getUpperBoundSamples(top1bc_upperbound , wimpy_var_upperbound , avg_diam_upperbound , err , delta/2.);
+      }
+      else{
+        max_num_samples = 0;
+      }
+
       // number of samples with VC dim bound
       double VC_bound = 0.5 / err / err * (log2(graph_diameter-1) + 1 + log(2. / delta));
 
@@ -900,12 +940,6 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
       std::cout << "VC_bound: " << VC_bound << std::endl;
       std::cout << "alpha_sp_sampling: " << alpha_sp_sampling << std::endl;
     }
-
-    //double start_time_delta_guess = get_time_sec();
-
-    //compute_delta_guess();
-
-    //std::cout << "time for compute delta guess " << get_time_sec() - start_time_delta_guess << std::endl;
 
     // reset variables for second pass
     iteration_index = 1;
@@ -936,7 +970,7 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
 
 
     // guess a first sample size according to what we computed in the first phase
-    double first_stopping_samples = 0;//2./err/err*( highest_freq*log(2./delta) );
+    first_stopping_samples = 0;//2./err/err*( highest_freq*log(2./delta) );
     double eps_guess = 1.;
     // start a binary search to find a good starting sample size
     double first_sample_lower = 1./err*log(2./delta);
@@ -992,6 +1026,10 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
     num_samples = 0;
     sup_emp_wimpy_var = 0;
 
+    if(enable_m_hat){
+      double max_num_iterations = log((double)max_num_samples/(double)first_stopping_samples)/log(1.2)+1;
+      delta_for_progressive_bound = delta/(floor(max_num_iterations));
+    }
 
 
 
@@ -1011,6 +1049,7 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
     second_phase_started = true;
 
     // start second phase
+    cout << "Starting second phase... " << std::endl;
 
     #pragma omp parallel
     {
@@ -1022,16 +1061,9 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
             for (uint32_t i = 0; i <= 10; i++) {
                 one_round(sp_sampler);
             }
-            //get_status (&status);
-            /*if(absolute){
-              get_status (&status);
-              time_comp_finished[omp_get_thread_num()] -= get_time_sec();
-              stop = compute_finished(&status);
-              time_comp_finished[omp_get_thread_num()] += get_time_sec();
-            }*/
 
             // stop if enough samples have been processed
-            if(num_samples >= omega){
+            if(enable_m_hat && num_samples >= omega){
               #pragma omp critical(stopcond)
               {
                 stop_mcrade = true;
@@ -1049,8 +1081,6 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
                         }
                         else{
                           next_stopping_samples = get_next_stopping_sample();
-                          //std::cout << "next_stopping_samples " << next_stopping_samples << std::endl;
-                          //std::cout << "(Printing thread: " << omp_get_thread_num() << ")" << endl;
                         }
                     }
                 }
@@ -1088,16 +1118,24 @@ void Probabilistic::run(uint32_t k, double delta, double err, uint32_t union_sam
     if(output_results){
       std::ofstream output_file_str;
       output_file_str.open(output_file);
-      for(uint32_t i=0; i < union_sample; i++){
-        uint64_t node_id = this->top_k->get(i);
-        double approx_node = this->top_k->get_value(i)/(double)num_samples;
-        output_file_str << node_id << ","<< approx_node << "\n";
+      if(!absolute){
+        for(uint32_t i=0; i < this->numresults_topk; i++){
+          uint64_t node_id = this->top_k->get(i);
+          double approx_node = this->top_k->get_value(i)/(double)num_samples;
+          output_file_str << node_id << ","<< approx_node << "\n";
+        }
+      }
+      else{
+          for(uint32_t i=0; i < get_nn(); i++){
+            uint64_t node_id = i;
+            double approx_node = approx[i]/(double)num_samples;
+            output_file_str << node_id << ","<< approx_node << "\n";
+          }
       }
       output_file_str.close();
     }
 
     n_pairs += tau;
-    cout << "finished run " << std::endl;
 }
 
 // Destructor of the class Probabilistic.

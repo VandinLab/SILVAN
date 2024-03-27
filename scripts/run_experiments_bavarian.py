@@ -10,48 +10,51 @@ graphs = graphs.set_index('graph_name').T.to_dict('list')
 print(graphs)
 #graphs = graphs["graph_name"].values
 
-num_runs = 5
+num_runs = 10
 db_path = "../datasets/"
 approx_modes = ["rk" , "ab" , "bp"]
 
-# parameters to choose epsilon
-max_eps = 10**-2
-min_eps = 10**-4
-numeps_ = 5
 expertoskip = set()
-
-choose_random_eps = 0
-if choose_random_eps == 1:
-    epsilons = [1.0]
-else:
-    epsilons = list(np.logspace(math.log(min_eps,10) , math.log(max_eps,10),numeps_))
-    epsilons.reverse()
-    epsilons = [0.01 , 0.005 , 0.0025 , 0.001 , 0.0005]
-    print("epsilons",epsilons)
+epsilons = [0.01 , 0.005 , 0.0025 , 0.001 , 0.0005]
+print("epsilons",epsilons)
 
 
 def check_experiment(eps , db , appx):
-    #print("checking ",eps," ",db," ",appx)
-    df = pd.read_csv("results_bavarian.csv",sep=";")
-    df = df[ df["graph_name"]==db ]
-    #print(df)
-    max_eps = max(epsilons)
-    #print("max_eps",max_eps)
-    df_ = df[ df["epsilon"]==max_eps ]
-    #print(df)
-    if df_.shape[0] == 0:
+    if os.path.isfile("results_bavarian.csv") == False:
         return 0
-    if not df_["time"].max() > 0.:
-        return 1
-    df_ = df[ df["estimator"]==appx ]
-    if not df_["time"].min() > 0.:
+    #print("checking ",eps," ",db," ",appx)
+    df_bav_res = pd.read_csv("results_bavarian.csv",sep=";")
+
+    #check if this run was already done
+    df_g_e = df_bav_res.copy()
+    df_g_e = df_g_e[ df_g_e["graph_name"]==db ]
+    df_g_e = df_g_e[ df_g_e["estimator"]==appx ]
+
+    max_eps = max(epsilons)
+    if max_eps == eps:
+        df_max_eps = df_g_e[ df_g_e["epsilon"]==max_eps ]
+        # consider the larget epsilon first
+        # if no experiments was run with the largest epsilon, run it
+        if df_max_eps.shape[0] == 0:
+            return 0
+
+    # check if current experiment will not terminate
+    df_g_e_term = df_g_e[ df_g_e["epsilon"]>=eps ]
+    if df_g_e_term.shape[0] > 0:
+        if not df_g_e_term["terminated"].min() > 0:
+            # this experiment will not terminate
+            print("skipping exp (",eps,db,appx,") for reason 1")
+            return 1
+
+    # consider the current epsilon
+    df_curr_eps = df_g_e[ df_g_e["epsilon"]==eps ]
+    # do not repeat if number of runs is enough
+    if df_curr_eps.shape[0] >= num_runs:
+        print("skipping exp (",eps,db,appx,") for reason 2")
         return 1
 
-    df = df[ df["epsilon"]==eps ]
-    df = df[ df["estimator"]==appx ]
-    if df.shape[0] > 0:
-        return 1
     return 0
+
 
 
 for run_id in range(num_runs):

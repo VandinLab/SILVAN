@@ -27,7 +27,7 @@ class Status {
 class Probabilistic : public Graph
 {
     public:
-        Probabilistic( const std::string &filename, bool directed = false, const double verb = 60, const double sampling_rate_ = 2.3, bool alpha_given_ = false, const double empirical_peeling_param_ = 2.0 , const std::string output_file_ = "" );
+        Probabilistic( const std::string &filename, bool directed = false, const double verb = 60, const double sampling_rate_ = 2.3, bool alpha_given_ = false, const double empirical_peeling_param_ = 2.0 , const bool enable_m_hat_ = true, const std::string output_file_ = "" );
         virtual ~Probabilistic();
         void run(const uint32_t k, const double delta, const double err = 0,
                  const uint32_t union_sample = 0,
@@ -49,7 +49,7 @@ class Probabilistic : public Graph
         void one_round(Sp_sampler &sp_sampler);
         bool compute_finished_mcrade(Status *status);
         double get_next_stopping_sample();
-        double get_epsilon_mcrade(double sup_emp_wimpy_var_ , double mcera_ , double delta_ , double num_samples_ , bool verbose) const;
+        double get_epsilon_mcrade(double sup_emp_wimpy_var_ , double mcera_ , double delta_ , double num_samples_ , double num_nodes_ , bool verbose) const;
         double check_topk_guarantees(bool verbose);
         double getUpperBoundTop1BC(double top1_est_bc , double delta);
         double getUpperBoundAvgDiameter(double delta , bool verbose);
@@ -76,6 +76,7 @@ class Probabilistic : public Graph
         // mcrade
         int graph_diameter;
         double last_stopping_samples;
+        double first_stopping_samples;
         bool second_phase_started;
         int64_t *mcrade;
         double *emp_wimpy_vars;
@@ -86,6 +87,9 @@ class Probabilistic : public Graph
         uint64_t num_samples;
         int *partition_index;
         uint32_t mctrials = 25;
+        bool enable_m_hat;
+        bool enable_emp_peel;
+        double delta_for_progressive_bound;
         uint64_t next_stopping_samples;
         int iteration_index;
         uint64_t distinct_nodes_top_k;
@@ -103,6 +107,7 @@ class Probabilistic : public Graph
         int number_of_non_empty_partitions;
         std::map<int, int> partitions_ids_map;
         std::string output_file;
+        uint32_t numresults_topk;
 };
 
 

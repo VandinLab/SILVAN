@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <unistd.h>
 #include <ctype.h>
+#include <fstream>
 
 #include "Rand_gen.h"
 #include "Graph.h"
@@ -26,6 +27,7 @@ int64_t k = 0;
 double sampling_rate = 2.3;
 bool alpha_given = false;
 double empirical_peeling_param = 2.0;
+bool m_hat_enabled = true;
 
 // mcrade
 int num_mc = 10;
@@ -37,7 +39,7 @@ void usage(const char *binary_name) {
     std::cerr << binary_name
         << ": compute betweenness centrality approximations for all nodes"
         << std::endl;
-    std::cerr << "USAGE: " << binary_name << " [-dh] [-v verbosity] [-k k_value] [-o output] [-a a_emp_peeling] [-s alpha] epsilon delta graph"
+    std::cerr << "USAGE: " << binary_name << " [-dhm] [-v verbosity] [-k k_value] [-o output] [-a a_emp_peeling] [-s alpha] epsilon delta graph"
         << std::endl;
     std::cerr << "\t-d: consider the graph as directed" << std::endl;
     std::cerr << "\t-k: compute the top-k betweenness centralities (if 0, compute all of them with absolute error) " << std::endl;
@@ -46,6 +48,7 @@ void usage(const char *binary_name) {
     std::cerr << "\t-o: path for the output file (if empty, do not write the output)" << std::endl;
     std::cerr << "\t-a: parameter a for empirical peeling (def. = 2)" << std::endl;
     std::cerr << "\t-s: parameter alpha for sampling shortest paths (def. = 2.3)" << std::endl;
+    std::cerr << "\t-m: disable the computation of m_hat" << std::endl;
     std::cerr << "\terr: accuracy (0 < epsilon < 1), relative accuracy if k > 0" << std::endl;
     std::cerr << "\tdelta: confidence (0 < delta < 1)" << std::endl;
     std::cerr << "\tgraph: graph edge list file" << std::endl;
@@ -57,13 +60,16 @@ void usage(const char *binary_name) {
  */
 int parse_command_line(int& argc, char *argv[]) {
     int opt;
-    while ((opt = getopt(argc, argv, "dhk:o:s:a:v:")) != -1) {
+    while ((opt = getopt(argc, argv, "dhmk:o:s:a:v:")) != -1) {
         switch (opt) {
         case 'd':
             directed = true;
             break;
         case 'h':
             return 2;
+            break;
+        case 'm':
+            m_hat_enabled = false;
             break;
         case 'o':
             std::cerr << "Writing output to " << optarg << std::endl;
@@ -77,9 +83,8 @@ int parse_command_line(int& argc, char *argv[]) {
             empirical_peeling_param = std::strtod(optarg, NULL);
             if (errno == ERANGE || empirical_peeling_param <= 1) {
                 std::cerr << ERROR_HEADER
-                    << "The value a should be >= 1."
+                    << "The value a should be >= 1. Empirical peeling disabled."
                     << std::endl;
-                return 1;
             }
             alpha_given = true;
             break;
@@ -123,6 +128,12 @@ int parse_command_line(int& argc, char *argv[]) {
             return 1;
         }
         graph_file = argv[argc - 1];
+        // test if input graph file exists
+        std::ifstream infile(graph_file);
+        if(!infile.good()){
+          std::cerr << "Problems with input graph file" << std::endl;
+          return 1;
+        }
     }
 
     return 0;
@@ -136,7 +147,7 @@ int main(int argc, char *argv[]){
         return correct_parse!=2;
     }
 
-    Probabilistic G( graph_file, directed, verb , sampling_rate , alpha_given , empirical_peeling_param , output_file);
+    Probabilistic G( graph_file, directed, verb , sampling_rate , alpha_given , empirical_peeling_param , m_hat_enabled , output_file);
     G.run((uint32_t) k, delta, err);
     std::cout << "run finished" << std::endl;
     return 0;

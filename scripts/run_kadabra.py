@@ -25,7 +25,10 @@ if args.k > 0:
     file_output_path = "output_topk.txt"
 cmd = path_executable+" "+directed_flag+topk_flag+str(args.epsilon)+" "+str(delta)+" "+str(args.db)+" > "+file_output_path
 print(cmd)
-os.system(cmd)
+retval = os.system(cmd)
+if retval > 0:
+    print("KADABRA terminated with errors")
+    exit()
 
 
 if os.path.isfile(output_path) == False:
